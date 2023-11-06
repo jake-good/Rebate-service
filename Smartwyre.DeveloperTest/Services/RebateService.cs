@@ -1,99 +1,65 @@
-﻿using Smartwyre.DeveloperTest.Data;
+﻿using System;
+using Smartwyre.DeveloperTest.Data;
 using Smartwyre.DeveloperTest.Types;
 
 namespace Smartwyre.DeveloperTest.Services;
 
 public class RebateService : IRebateService
 {
+    readonly IProductDataStore _productDataStore;
+    readonly IRebateDataStore _rebateDataStore;
+    private readonly ICalculatorFactory _calculatorFactory;
+
+    public RebateService(IProductDataStore productDataStore, IRebateDataStore rebateDataStore, ICalculatorFactory calculatorFactory)
+    {
+        _productDataStore = productDataStore;
+        _rebateDataStore = rebateDataStore;
+        _calculatorFactory = calculatorFactory;
+    }
+
     public CalculateRebateResult Calculate(CalculateRebateRequest request)
     {
-        var rebateDataStore = new RebateDataStore();
-        var productDataStore = new ProductDataStore();
-
-        Rebate rebate = rebateDataStore.GetRebate(request.RebateIdentifier);
-        Product product = productDataStore.GetProduct(request.ProductIdentifier);
-
-        var result = new CalculateRebateResult();
-
-        var rebateAmount = 0m;
-
-        switch (rebate.Incentive)
+        Rebate rebate = _rebateDataStore.GetRebate(request.RebateIdentifier);
+        if (rebate == null)
         {
-            case IncentiveType.FixedCashAmount:
-                if (rebate == null)
-                {
-                    result.Success = false;
-                }
-                else if (!product.SupportedIncentives.HasFlag(SupportedIncentiveType.FixedCashAmount))
-                {
-                    result.Success = false;
-                }
-                else if (rebate.Amount == 0)
-                {
-                    result.Success = false;
-                }
-                else
-                {
-                    rebateAmount = rebate.Amount;
-                    result.Success = true;
-                }
-                break;
-
-            case IncentiveType.FixedRateRebate:
-                if (rebate == null)
-                {
-                    result.Success = false;
-                }
-                else if (product == null)
-                {
-                    result.Success = false;
-                }
-                else if (!product.SupportedIncentives.HasFlag(SupportedIncentiveType.FixedRateRebate))
-                {
-                    result.Success = false;
-                }
-                else if (rebate.Percentage == 0 || product.Price == 0 || request.Volume == 0)
-                {
-                    result.Success = false;
-                }
-                else
-                {
-                    rebateAmount += product.Price * rebate.Percentage * request.Volume;
-                    result.Success = true;
-                }
-                break;
-
-            case IncentiveType.AmountPerUom:
-                if (rebate == null)
-                {
-                    result.Success = false;
-                }
-                else if (product == null)
-                {
-                    result.Success = false;
-                }
-                else if (!product.SupportedIncentives.HasFlag(SupportedIncentiveType.AmountPerUom))
-                {
-                    result.Success = false;
-                }
-                else if (rebate.Amount == 0 || request.Volume == 0)
-                {
-                    result.Success = false;
-                }
-                else
-                {
-                    rebateAmount += rebate.Amount * request.Volume;
-                    result.Success = true;
-                }
-                break;
+            return new CalculateRebateResult
+            {
+                Success = false,
+                Reason = "No Rebate found for identifier"
+            };
         }
 
+        Product product = _productDataStore.GetProduct(request.ProductIdentifier);
+        if (product == null)
+        {
+            return new CalculateRebateResult
+            {
+                Success = false,
+                Reason = "No Product found for identifier"
+            };
+        }
+
+        var rebateCalculator = _calculatorFactory.GetCalculator(rebate.Incentive);
+        if (rebateCalculator == null)
+        {
+            return new CalculateRebateResult
+            {
+                Success = false,
+                Reason = $"No calulator implemented for Incentive type {rebate.Incentive}",
+            };
+        }
+
+        var result = rebateCalculator.ValidateAndCalculateRebate(product, rebate, request.Volume);
         if (result.Success)
         {
-            var storeRebateDataStore = new RebateDataStore();
-            storeRebateDataStore.StoreCalculationResult(rebate, rebateAmount);
+            _rebateDataStore.StoreCalculationResult(rebate, result.Amount);
         }
 
         return result;
     }
 }
+
+// todo ~ incentive types -> supportedincentivetypes?
+// ~ amount is used for two different things?? ~ should type be diff
+// ~ write CLI 
+
